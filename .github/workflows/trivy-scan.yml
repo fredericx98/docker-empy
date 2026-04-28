@@ -21,7 +21,7 @@ jobs:
     steps:
       # Pull repository contents so Trivy can scan the codebase
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # Run Trivy filesystem scan on the current repository
       - name: Run Trivy filesystem scan
