@@ -1,0 +1,36 @@
+# Configure secret first:
+# GitHub repository -> Settings -> Secrets and variables -> Actions -> New repository secret
+# Name: AIKIDO_API_KEY
+# Value: your Aikido Local Scanner API key
+
+name: Aikido Security Scan
+
+on:
+  # Manual trigger from the Actions tab
+  workflow_dispatch:
+
+  # Weekly trigger: Monday 08:00 Argentina (UTC-3) = Monday 11:00 UTC
+  schedule:
+    - cron: "0 11 * * 1"
+
+jobs:
+  aikido-local-scan:
+    # Runner host (job runs inside the configured container image)
+    runs-on: ubuntu-latest
+    container:
+      image: aikidosecurity/local-scanner:latest
+
+    steps:
+      # Pull repository contents so local scanner can analyze it
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          path: repo
+
+      # Run Aikido local code scan with dynamic repo and branch metadata
+      - name: Run Aikido local scan
+        run: >
+          aikido-local-scanner scan repo
+          --apikey "${{ secrets.AIKIDO_API_KEY }}"
+          --repositoryname "${{ github.event.repository.name }}"
+          --branchname "${{ github.ref_name }}"
