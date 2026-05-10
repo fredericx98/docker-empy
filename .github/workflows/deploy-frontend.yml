@@ -1,19 +1,12 @@
-name: Deploy Frontend → S3 + CloudFront
+name: Deploy Frontend → Azure Static Web Apps
 
 on:
   push:
-    branches: [main, master]
+    branches: [claude/bplaybet-monitoring-dashboard-3pkfo]
     paths:
       - 'frontend/**'
       - '.github/workflows/deploy-frontend.yml'
   workflow_dispatch:
-    inputs:
-      environment:
-        description: 'Target environment'
-        required: true
-        default: 'prod'
-        type: choice
-        options: [prod, preprod, qa]
 
 concurrency:
   group: deploy-frontend-${{ github.ref }}
@@ -23,12 +16,6 @@ jobs:
   build-and-deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment || 'prod' }}
-
-    # --- Permissions needed for OIDC (no long-lived keys) ---
-    permissions:
-      id-token: write   # OIDC token
-      contents: read
 
     steps:
       - name: Checkout
@@ -41,49 +28,20 @@ jobs:
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
-      - name: Install dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Build
+      - name: Install & Build
         working-directory: frontend
         env:
           VITE_API_URL: ${{ vars.VITE_API_URL }}
-          VITE_ENV:     ${{ github.event.inputs.environment || 'prod' }}
-        run: npm run build
+        run: |
+          npm ci
+          npm run build
 
-      # ── AWS auth via OIDC (no static keys stored in secrets) ──────────
-      - name: Configure AWS credentials (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Deploy to Azure Static Web Apps
+        uses: Azure/static-web-apps-deploy@v1
         with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region:     ${{ vars.AWS_REGION || 'us-east-1' }}
-
-      # ── Sync to S3 ────────────────────────────────────────────────────
-      - name: Sync to S3
-        working-directory: frontend
-        run: |
-          aws s3 sync dist/ s3://${{ vars.S3_BUCKET_NAME }}/ \
-            --delete \
-            --cache-control "public, max-age=31536000, immutable" \
-            --exclude "index.html"
-
-          # index.html: no cache so deploys are instant
-          aws s3 cp dist/index.html s3://${{ vars.S3_BUCKET_NAME }}/index.html \
-            --cache-control "no-cache, no-store, must-revalidate" \
-            --content-type "text/html"
-
-      # ── Invalidate CloudFront ─────────────────────────────────────────
-      - name: Invalidate CloudFront
-        run: |
-          aws cloudfront create-invalidation \
-            --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID }} \
-            --paths "/*"
-
-      - name: Summary
-        run: |
-          echo "### Deploy completado" >> $GITHUB_STEP_SUMMARY
-          echo "- Entorno: **${{ github.event.inputs.environment || 'prod' }}**" >> $GITHUB_STEP_SUMMARY
-          echo "- Bucket: \`${{ vars.S3_BUCKET_NAME }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- CloudFront: \`${{ vars.CLOUDFRONT_DISTRIBUTION_ID }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Commit: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token:                       ${{ secrets.GITHUB_TOKEN }}
+          action:                           upload
+          app_location:                     frontend
+          output_location:                  dist
+          skip_app_build:                   true
