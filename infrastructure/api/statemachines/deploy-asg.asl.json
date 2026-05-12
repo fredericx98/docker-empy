@@ -1,0 +1,14 @@
+{
+  "Comment": "Dummy ASG deploy — shared by asg-backend and fronts. Replace with real ECS/ASG logic.",
+  "StartAt": "SimulateWork",
+  "States": {
+    "SimulateWork": {
+      "Type": "Wait",
+      "Seconds": 30,
+      "Next": "Done"
+    },
+    "Done": {
+      "Type": "Succeed"
+    }
+  }
+}

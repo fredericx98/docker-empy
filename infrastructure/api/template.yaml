@@ -1,0 +1,299 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: BPlayBet Deploy API — API Gateway + Lambda + DynamoDB cache + Step Functions
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Architectures: [arm64]
+    Timeout: 15
+    MemorySize: 256
+    Environment:
+      Variables:
+        CACHE_TABLE: !Ref CacheTable
+        AUDIT_TABLE:  !Ref AuditTable
+        ASG_BACKEND_SFN_ARN:   !Ref AsgBackendStateMachine
+        FRONTS_SFN_ARN:        !Ref FrontsStateMachine
+        IMAGE_BUILDER_SFN_ARN: !Ref ImageBuilderStateMachine
+        CF_INVALIDATION_SFN_ARN: !Ref CfInvalidationStateMachine
+        CACHE_TTL_SECONDS: "60"
+
+Resources:
+
+  # ── API Gateway ───────────────────────────────────────────────────────────────
+  DeployApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: bplaybet-deploy-api
+      StageName: v1
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,x-api-key,X-Triggered-By'"
+        AllowOrigin: "'*'"
+      Auth:
+        ApiKeyRequired: true
+        UsagePlan:
+          CreateUsagePlan: PER_API
+          UsagePlanName: bplaybet-deploy-plan
+
+  # ── DynamoDB ──────────────────────────────────────────────────────────────────
+  # Short-lived status cache (TTL 60s). Avoids hammering Step Functions on every poll.
+  CacheTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-cache"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: action
+          AttributeType: S
+      KeySchema:
+        - AttributeName: action
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # Permanent audit log. PK=action SK=triggeredAt — query all runs per action.
+  AuditTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-audit"
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: action
+          AttributeType: S
+        - AttributeName: triggeredAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: action
+          KeyType: HASH
+        - AttributeName: triggeredAt
+          KeyType: RANGE
+
+  # ── Lambda Functions ──────────────────────────────────────────────────────────
+  TriggerDeployFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2020
+        EntryPoints: [index.js]
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-trigger-deploy"
+      CodeUri: functions/trigger-deploy/
+      Handler: index.handler
+      Description: Checks for running executions, starts Step Functions, writes audit record
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AuditTable
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt AsgBackendStateMachine.Name
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt FrontsStateMachine.Name
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt ImageBuilderStateMachine.Name
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt CfInvalidationStateMachine.Name
+        - Statement:
+            - Effect: Allow
+              Action: states:ListExecutions
+              Resource:
+                - !Ref AsgBackendStateMachine
+                - !Ref FrontsStateMachine
+                - !Ref ImageBuilderStateMachine
+                - !Ref CfInvalidationStateMachine
+      Events:
+        TriggerDeploy:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DeployApi
+            Path: /deploy/{action}
+            Method: POST
+
+  GetStatusFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2020
+        EntryPoints: [index.js]
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-get-status"
+      CodeUri: functions/get-status/
+      Handler: index.handler
+      Description: Returns deploy status for all or one action; caches results in DynamoDB for 60s
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CacheTable
+        - Statement:
+            - Effect: Allow
+              Action: states:ListExecutions
+              Resource:
+                - !Ref AsgBackendStateMachine
+                - !Ref FrontsStateMachine
+                - !Ref ImageBuilderStateMachine
+                - !Ref CfInvalidationStateMachine
+      Events:
+        GetAllStatus:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DeployApi
+            Path: /deploy/status
+            Method: GET
+        GetActionStatus:
+          Type: Api
+          Properties:
+            RestApiId: !Ref DeployApi
+            Path: /deploy/status/{action}
+            Method: GET
+
+  # ── Step Functions ────────────────────────────────────────────────────────────
+  # One state machine per action — keeps ListExecutions results isolated per action.
+  # asg-backend and fronts share the same ASL definition but are independent SFNs.
+  AsgBackendStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub "${AWS::StackName}-asg-backend"
+      DefinitionUri: statemachines/deploy-asg.asl.json
+      Type: STANDARD
+      Logging:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt AsgBackendLogGroup.Arn
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: "*"
+
+  FrontsStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub "${AWS::StackName}-fronts"
+      DefinitionUri: statemachines/deploy-asg.asl.json
+      Type: STANDARD
+      Logging:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt FrontsLogGroup.Arn
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: "*"
+
+  ImageBuilderStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub "${AWS::StackName}-image-builder"
+      DefinitionUri: statemachines/image-builder.asl.json
+      Type: STANDARD
+      Logging:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt ImageBuilderLogGroup.Arn
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: "*"
+
+  CfInvalidationStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub "${AWS::StackName}-cf-invalidation"
+      DefinitionUri: statemachines/cf-invalidation.asl.json
+      Type: STANDARD
+      Logging:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt CfInvalidationLogGroup.Arn
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogDelivery
+                - logs:GetLogDelivery
+                - logs:UpdateLogDelivery
+                - logs:DeleteLogDelivery
+                - logs:ListLogDeliveries
+                - logs:PutResourcePolicy
+                - logs:DescribeResourcePolicies
+                - logs:DescribeLogGroups
+              Resource: "*"
+
+  # ── CloudWatch Log Groups ─────────────────────────────────────────────────────
+  AsgBackendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/states/${AWS::StackName}-asg-backend"
+      RetentionInDays: 30
+
+  FrontsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/states/${AWS::StackName}-fronts"
+      RetentionInDays: 30
+
+  ImageBuilderLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/states/${AWS::StackName}-image-builder"
+      RetentionInDays: 30
+
+  CfInvalidationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/states/${AWS::StackName}-cf-invalidation"
+      RetentionInDays: 30
+
+Outputs:
+  ApiEndpoint:
+    Description: API Gateway base URL
+    Value: !Sub "https://${DeployApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
+
+  ApiKeyId:
+    Description: API Key ID — retrieve value with: aws apigateway get-api-key --api-key <ID> --include-value
+    Value: !Ref DeployApiApiKey
+
+  CacheTableName:
+    Value: !Ref CacheTable
+
+  AuditTableName:
+    Value: !Ref AuditTable

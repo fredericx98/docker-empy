@@ -1,0 +1,14 @@
+{
+  "Comment": "Dummy image builder — simulates a longer build. Replace with real CodeBuild/EC2 AMI logic.",
+  "StartAt": "SimulateBuild",
+  "States": {
+    "SimulateBuild": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "Done"
+    },
+    "Done": {
+      "Type": "Succeed"
+    }
+  }
+}

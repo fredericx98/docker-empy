@@ -1,0 +1,14 @@
+version = 0.1
+
+[default.global.parameters]
+stack_name = "bplaybet-deploy-api"
+region     = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+
+[default.build.parameters]
+cached   = true
+parallel = true
+
+[default.deploy.parameters]
+resolve_s3        = true   # SAM manages the deployment S3 bucket automatically
+confirm_changeset = true
