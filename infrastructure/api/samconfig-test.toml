@@ -1,0 +1,16 @@
+version = 0.1
+
+[default.global.parameters]
+stack_name = "bplaybet-api-test"
+region     = "us-east-1"
+capabilities = "CAPABILITY_IAM"
+
+[default.build.parameters]
+template  = "template-test.yaml"
+cached    = true
+parallel  = true
+
+[default.deploy.parameters]
+template_file     = "template-test.yaml"
+resolve_s3        = true
+confirm_changeset = true

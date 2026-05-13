@@ -1,0 +1,8 @@
+{
+  "name": "mock",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.600.0"
+  }
+}
