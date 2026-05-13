@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: BPlayBet Deploy API — API Gateway + Lambda + DynamoDB cache + Step Functions
+Description: BPlayBet Deploy API — REST + WebSocket + Lambda + DynamoDB + Step Functions + EventBridge
 
 Globals:
   Function:
@@ -10,17 +10,18 @@ Globals:
     MemorySize: 256
     Environment:
       Variables:
-        CACHE_TABLE: !Ref CacheTable
-        AUDIT_TABLE:  !Ref AuditTable
-        ASG_BACKEND_SFN_ARN:   !Ref AsgBackendStateMachine
-        FRONTS_SFN_ARN:        !Ref FrontsStateMachine
-        IMAGE_BUILDER_SFN_ARN: !Ref ImageBuilderStateMachine
+        CACHE_TABLE:             !Ref CacheTable
+        AUDIT_TABLE:             !Ref AuditTable
+        CONNECTIONS_TABLE:       !Ref ConnectionsTable
+        ASG_BACKEND_SFN_ARN:     !Ref AsgBackendStateMachine
+        FRONTS_SFN_ARN:          !Ref FrontsStateMachine
+        IMAGE_BUILDER_SFN_ARN:   !Ref ImageBuilderStateMachine
         CF_INVALIDATION_SFN_ARN: !Ref CfInvalidationStateMachine
-        CACHE_TTL_SECONDS: "60"
+        CACHE_TTL_SECONDS:       "60"
 
 Resources:
 
-  # ── API Gateway ───────────────────────────────────────────────────────────────
+  # ── REST API ──────────────────────────────────────────────────────────────────
   DeployApi:
     Type: AWS::Serverless::Api
     Properties:
@@ -35,6 +36,69 @@ Resources:
         UsagePlan:
           CreateUsagePlan: PER_API
           UsagePlanName: bplaybet-deploy-plan
+
+  # ── WebSocket API ─────────────────────────────────────────────────────────────
+  WebSocketApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: bplaybet-deploy-ws
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: "$request.body.action"
+
+  WebSocketStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref WebSocketApi
+      StageName: v1
+      AutoDeploy: true
+
+  # $connect
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $connect
+      AuthorizationType: NONE
+      Target: !Sub "integrations/${ConnectIntegration}"
+
+  ConnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsConnectFunction.Arn}/invocations"
+
+  WsConnectPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref WsConnectFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/*"
+
+  # $disconnect
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $disconnect
+      AuthorizationType: NONE
+      Target: !Sub "integrations/${DisconnectIntegration}"
+
+  DisconnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsDisconnectFunction.Arn}/invocations"
+
+  WsDisconnectPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref WsDisconnectFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*/*"
 
   # ── DynamoDB ──────────────────────────────────────────────────────────────────
   # Short-lived status cache (TTL 60s). Avoids hammering Step Functions on every poll.
@@ -71,6 +135,22 @@ Resources:
           KeyType: HASH
         - AttributeName: triggeredAt
           KeyType: RANGE
+
+  # Active WebSocket connections. TTL 2h auto-expires stale connections.
+  ConnectionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "${AWS::StackName}-connections"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: connectionId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: connectionId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
 
   # ── Lambda Functions ──────────────────────────────────────────────────────────
   TriggerDeployFunction:
@@ -125,7 +205,7 @@ Resources:
       FunctionName: !Sub "${AWS::StackName}-get-status"
       CodeUri: functions/get-status/
       Handler: index.handler
-      Description: Returns deploy status for all or one action; caches results in DynamoDB for 60s
+      Description: One-time status snapshot on page load; feeds initial UI state before WS takes over
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref CacheTable
@@ -150,6 +230,99 @@ Resources:
             RestApiId: !Ref DeployApi
             Path: /deploy/status/{action}
             Method: GET
+
+  WsConnectFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2020
+        EntryPoints: [index.js]
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-ws-connect"
+      CodeUri: functions/ws-connect/
+      Handler: index.handler
+      Description: Stores connectionId in DynamoDB when a client opens the WebSocket
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ConnectionsTable
+
+  WsDisconnectFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2020
+        EntryPoints: [index.js]
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-ws-disconnect"
+      CodeUri: functions/ws-disconnect/
+      Handler: index.handler
+      Description: Removes connectionId from DynamoDB when a client closes the WebSocket
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ConnectionsTable
+
+  NotifyStatusFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2020
+        EntryPoints: [index.js]
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-notify-status"
+      CodeUri: functions/notify-status/
+      Handler: index.handler
+      Description: Triggered by EventBridge on SFN state change; pushes update to all WS connections
+      Environment:
+        Variables:
+          WS_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ConnectionsTable
+        - Statement:
+            - Effect: Allow
+              Action: execute-api:ManageConnections
+              Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*"
+
+  # ── EventBridge ───────────────────────────────────────────────────────────────
+  # SFN emits execution state change events natively — no extra instrumentation needed.
+  SfnStatusChangeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-sfn-status-change"
+      Description: Fires when any managed SFN execution reaches a terminal state
+      EventPattern:
+        source:
+          - aws.states
+        detail-type:
+          - "Step Functions Execution Status Change"
+        detail:
+          stateMachineArn:
+            - !Ref AsgBackendStateMachine
+            - !Ref FrontsStateMachine
+            - !Ref ImageBuilderStateMachine
+            - !Ref CfInvalidationStateMachine
+          status:
+            - SUCCEEDED
+            - FAILED
+            - TIMED_OUT
+            - ABORTED
+      Targets:
+        - Arn: !GetAtt NotifyStatusFunction.Arn
+          Id: NotifyStatusTarget
+
+  NotifyStatusPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref NotifyStatusFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SfnStatusChangeRule.Arn
 
   # ── Step Functions ────────────────────────────────────────────────────────────
   # One state machine per action — keeps ListExecutions results isolated per action.
@@ -285,11 +458,15 @@ Resources:
 
 Outputs:
   ApiEndpoint:
-    Description: API Gateway base URL
+    Description: REST API base URL
     Value: !Sub "https://${DeployApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
 
+  WebSocketEndpoint:
+    Description: WebSocket connection URL (use in the frontend as the WS endpoint)
+    Value: !Sub "wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/v1"
+
   ApiKeyId:
-    Description: API Key ID — retrieve value with: aws apigateway get-api-key --api-key <ID> --include-value
+    Description: Run 'aws apigateway get-api-key --api-key <ID> --include-value' to retrieve the key value
     Value: !Ref DeployApiApiKey
 
   CacheTableName:
