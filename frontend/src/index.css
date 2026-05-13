@@ -3,47 +3,15 @@
 @tailwind utilities;
 
 @layer base {
-  html { @apply bg-gray-950 text-gray-100; }
-  ::-webkit-scrollbar { @apply w-1.5 h-1.5; }
-  ::-webkit-scrollbar-track { @apply bg-gray-900; }
-  ::-webkit-scrollbar-thumb { @apply bg-gray-700 rounded-full; }
-  ::-webkit-scrollbar-thumb:hover { @apply bg-gray-600; }
-}
+  * { box-sizing: border-box; }
 
-@layer components {
-  .glass {
-    @apply bg-gray-900/60 backdrop-blur-sm border border-gray-800/60;
+  body {
+    @apply bg-[#0a0f1e] text-slate-100;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
   }
-  .card {
-    @apply bg-gray-900 border border-gray-800 rounded-xl;
-  }
-  .badge-healthy {
-    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold
-           bg-emerald-500/10 text-emerald-400 border border-emerald-500/20;
-  }
-  .badge-warning {
-    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold
-           bg-amber-500/10 text-amber-400 border border-amber-500/20;
-  }
-  .badge-critical {
-    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold
-           bg-red-500/10 text-red-400 border border-red-500/20;
-  }
-  .badge-info {
-    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold
-           bg-blue-500/10 text-blue-400 border border-blue-500/20;
-  }
-}
 
-.dot-pulse {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  animation: dotPulse 2s ease-in-out infinite;
-}
-
-@keyframes dotPulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.4; transform: scale(0.85); }
+  ::-webkit-scrollbar       { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { @apply bg-transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-[#1e2d4a] rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-[#2a3d5e]; }
 }

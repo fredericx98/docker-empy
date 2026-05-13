@@ -1,11 +1,6 @@
 name: Deploy Frontend → Azure Static Web Apps
 
 on:
-  push:
-    branches: [claude/bplaybet-monitoring-dashboard-3pkfo]
-    paths:
-      - 'frontend/**'
-      - '.github/workflows/deploy-frontend.yml'
   workflow_dispatch:
 
 concurrency:

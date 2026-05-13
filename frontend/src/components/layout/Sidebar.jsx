@@ -1,67 +1,65 @@
 import { NavLink } from 'react-router-dom'
-import {
-  LayoutDashboard, Activity, Server, BarChart3,
-  BellRing, GitBranch, Settings, Zap,
-} from 'lucide-react'
+import { LayoutDashboard, Wrench, ClipboardList, Server } from 'lucide-react'
 import clsx from 'clsx'
 
 const NAV = [
-  { to: '/',               icon: LayoutDashboard, label: 'Overview'        },
-  { to: '/monitoring',     icon: Activity,        label: 'Monitoreo'       },
-  { to: '/infrastructure', icon: Server,          label: 'Infraestructura' },
-  { to: '/analytics',      icon: BarChart3,       label: 'Analytics'       },
-  { to: '/alerts',         icon: BellRing,        label: 'Alertas',  badge: 3 },
-  { to: '/step-functions', icon: GitBranch,       label: 'Step Functions'  },
-  { to: '/config',         icon: Settings,        label: 'Configuración'   },
+  {
+    group: 'BPlayBet',
+    items: [
+      { to: '/bplaybet/overview',     icon: LayoutDashboard, label: 'Overview'      },
+      { to: '/bplaybet/operaciones',  icon: Wrench,          label: 'Operaciones'   },
+      { to: '/bplaybet/ejecuciones',  icon: ClipboardList,   label: 'Ejecuciones'   },
+    ],
+  },
+  {
+    group: 'Hosting',
+    items: [
+      { to: '/plesk', icon: Server, label: 'Plesk' },
+    ],
+  },
 ]
 
 export default function Sidebar() {
   return (
-    <aside className="flex flex-col w-60 min-h-screen bg-gray-950 border-r border-gray-800 shrink-0">
-      {/* Logo */}
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-gray-800">
-        <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-brand-500 shadow-lg shadow-brand-500/30">
-          <Zap className="w-5 h-5 text-gray-950" strokeWidth={2.5} />
-        </div>
-        <div>
-          <p className="text-sm font-bold text-white tracking-wide leading-none">BPlayBet</p>
-          <p className="text-[10px] text-gray-500 mt-0.5 uppercase tracking-widest">Monitor</p>
-        </div>
+    <aside className="w-56 shrink-0 flex flex-col bg-[#080c18] border-r border-[#151e35] h-screen sticky top-0">
+      {/* Brand */}
+      <div className="px-5 py-5 border-b border-[#151e35]">
+        <span className="text-xl font-bold tracking-tight text-white">BPlay<span className="text-orange-500">Bet</span></span>
+        <p className="text-[10px] text-slate-500 mt-0.5 uppercase tracking-widest">Infra Dashboard</p>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-0.5">
-        {NAV.map(({ to, icon: Icon, label, badge }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            className={({ isActive }) =>
-              clsx(
-                'flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 group',
-                isActive
-                  ? 'bg-brand-500/15 text-brand-400 border border-brand-500/20'
-                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/60',
-              )
-            }
-          >
-            <Icon className="w-4 h-4 shrink-0" />
-            <span className="flex-1">{label}</span>
-            {badge && (
-              <span className="flex items-center justify-center w-5 h-5 rounded-full bg-red-500 text-[10px] font-bold text-white">
-                {badge}
-              </span>
-            )}
-          </NavLink>
+      <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-6">
+        {NAV.map(({ group, items }) => (
+          <div key={group}>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-600 px-2 mb-1">{group}</p>
+            <ul className="space-y-0.5">
+              {items.map(({ to, icon: Icon, label }) => (
+                <li key={to}>
+                  <NavLink
+                    to={to}
+                    className={({ isActive }) =>
+                      clsx(
+                        'flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                        isActive
+                          ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                      )
+                    }
+                  >
+                    <Icon size={15} />
+                    {label}
+                  </NavLink>
+                </li>
+              ))}
+            </ul>
+          </div>
         ))}
       </nav>
 
-      {/* Footer env indicator */}
-      <div className="px-4 pb-4">
-        <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-gray-900 border border-gray-800">
-          <span className="dot-pulse bg-emerald-400" />
-          <span className="text-xs text-gray-400">Production · us-east-1</span>
-        </div>
+      {/* Footer */}
+      <div className="px-5 py-3 border-t border-[#151e35]">
+        <p className="text-[10px] text-slate-600">Producción · us-east-1</p>
       </div>
     </aside>
   )
