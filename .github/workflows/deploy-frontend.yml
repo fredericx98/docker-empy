@@ -2,6 +2,12 @@ name: Deploy Frontend → Azure Static Web Apps
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - claude/fix-github-actions-workflow-NATqT
+    paths:
+      - 'frontend/**'
 
 concurrency:
   group: deploy-frontend-${{ github.ref }}
