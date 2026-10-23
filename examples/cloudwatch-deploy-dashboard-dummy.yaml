@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Dashboard DUMMY de ejemplo: panel de deploys con custom widgets de CloudWatch.
+  Todos los datos son inventados y los botones NO ejecutan nada: la Lambda solo
+  devuelve un mensaje de simulacion. Su rol no tiene permisos sobre ningun servicio
+  (solo escribir sus propios logs).
+
+Parameters:
+  DashboardName:
+    Type: String
+    Default: bplaybet-deploys-dummy
+  Entorno:
+    Type: String
+    Default: prod01
+    AllowedValues: [prod01, prod02, preprod, qa]
+
+Resources:
+  DummyWidgetRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      # Solo logs. Sin states:*, autoscaling:* ni ec2:*: no puede ejecutar nada.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  DummyWidgetFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${DashboardName}-widget"
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 10
+      Role: !GetAtt DummyWidgetRole.Arn
+      Environment:
+        Variables:
+          ENTORNO: !Ref Entorno
+      Code:
+        ZipFile: |
+          import json, os
+          from html import escape
+          ENV = os.environ["ENTORNO"]
+          PFX = "boldt-bplay-bplaybet-production"
+          ASGS = [
+              ("web-jujuy", "lt-0a1b2c3d", "v42", "ami-0f3c9a0000000001", "13/10 13:02", "4/4 en v42"),
+              ("web-mendoza", "lt-07de4f5a", "v38", "ami-0b88d10000000002", "13/10 13:02", "6/6 en v38"),
+              ("web-paraguay", "lt-0c44e61f", "v31", "ami-02a7e50000000003", "13/10 13:03", "2/2 en v31"),
+              ("web-entrerios", "lt-09f2a7b6", "v19", "ami-0e51c00000000004", "06/10 12:48", "1/3 en v18"),
+              ("backoffice", "lt-0e90b1c2", "v27", "ami-07c3aa0000000005", "13/10 20:01", "1/1 en v27"),
+          ]
+          EXECS = [
+              ("deploy-web-parana", "RUNNING", "23/10 18:41", "4 min"),
+              ("deploy-frontends", "SUCCEEDED", "13/10 13:06", "6 min"),
+              ("deploy-clis", "SUCCEEDED", "13/10 20:03", "9 min"),
+              ("imagebuilder-run", "FAILED", "12/10 22:10", "31 min"),
+          ]
+
+          def table(head, rows):
+              h = "".join(f"<th>{c}</th>" for c in head)
+              b = "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
+              return f"<table><tr>{h}</tr>{b}</table>"
+
+          def button(arn, label, action, comp, primary):
+              sfn = f"{PFX}-{action}-{comp}"
+              payload = json.dumps({"action": action, "sfn": sfn})
+              msg = f"SIMULACION: {action} de {comp} en {ENV}. No se ejecuta nada. Continuar?"
+              cls = "btn btn-primary" if primary else "btn"
+              return (f'<a class="{cls}">{label}</a>'
+                      f'<cwdb-action action="call" display="popup" endpoint="{arn}" '
+                      f'confirmation="{escape(msg)}">{payload}</cwdb-action>')
+
+          def handler(event, context):
+              if event.get("describe"):
+                  return "Widget dummy del panel de deploys (no ejecuta nada)."
+              arn = context.invoked_function_arn
+              if event.get("action"):
+                  # Click en un boton (ya confirmado). Solo se simula.
+                  print(json.dumps({"simulado": True, "action": event.get("action"), "sfn": event.get("sfn")}))
+                  return (f"<h2>Simulacion</h2><p>Se habria ejecutado "
+                          f"<code>{escape(str(event.get('sfn')))}</code> con input <code>{{}}</code>.</p>"
+                          f"<p><b>No se ejecuto nada:</b> esta Lambda no tiene permisos sobre Step Functions.</p>")
+              w = event.get("widget")
+              if w == "ami":
+                  return table(["ASG", "Launch Template", "Version default", "AMI", "Fecha AMI", "Instancias"], ASGS)
+              if w == "deploy":
+                  rows = [(f"<code>{c}</code>", button(arn, "Deploy", "deploy", c, True),
+                           button(arn, "Rollback", "rollback", c, False)) for c, *_ in ASGS]
+                  rows.append(("<b>todos los frontends</b>", button(arn, "Deploy", "deploy", "frontends", True),
+                               button(arn, "Rollback", "rollback-default-version", "frontends", False)))
+                  return table(["Componente", "", ""], rows)
+              if w == "executions":
+                  return table(["State machine", "Estado", "Inicio", "Duracion"],
+                               [(f"<code>{PFX}-{n}</code>", s, i, d) for n, s, i, d in EXECS])
+              return "<p>Parametro <code>widget</code> desconocido.</p>"
+
+  DeployDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Ref DashboardName
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text", "x": 0, "y": 0, "width": 24, "height": 2,
+              "properties": {
+                "markdown": "## Panel de deploys - ${Entorno} (DUMMY)\nDatos inventados. Los botones piden confirmacion y solo muestran una simulacion: **no se ejecuta ninguna Step Function**."
+              }
+            },
+            {
+              "type": "custom", "x": 0, "y": 2, "width": 15, "height": 8,
+              "properties": {
+                "title": "AMI por Auto Scaling Group",
+                "endpoint": "${DummyWidgetFunction.Arn}",
+                "params": { "widget": "ami" },
+                "updateOn": { "refresh": true, "resize": false, "timeRange": false }
+              }
+            },
+            {
+              "type": "custom", "x": 15, "y": 2, "width": 9, "height": 8,
+              "properties": {
+                "title": "Deploy",
+                "endpoint": "${DummyWidgetFunction.Arn}",
+                "params": { "widget": "deploy" },
+                "updateOn": { "refresh": false, "resize": false, "timeRange": false }
+              }
+            },
+            {
+              "type": "custom", "x": 0, "y": 10, "width": 24, "height": 6,
+              "properties": {
+                "title": "Ultimas ejecuciones de Step Functions",
+                "endpoint": "${DummyWidgetFunction.Arn}",
+                "params": { "widget": "executions" },
+                "updateOn": { "refresh": true, "resize": false, "timeRange": false }
+              }
+            }
+          ]
+        }
+
+Outputs:
+  DashboardUrl:
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${DashboardName}"
